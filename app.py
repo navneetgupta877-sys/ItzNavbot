@@ -12,27 +12,21 @@ app = Flask(__name__)
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# Gemini model
-GEMINI_MODEL = os.environ.get(
-    "GEMINI_MODEL",
-    "gemini-2.5-flash"
-)
-
-# Telegram API
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# Gemini API
-GEMINI_URL = (
-    f"https://generativelanguage.googleapis.com/"
-    f"v1beta/models/{GEMINI_MODEL}:generateContent"
-)
+# Models are tried in this order
+GEMINI_MODELS = [
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash"
+]
 
 
 # =========================
-# SEND TELEGRAM MESSAGE
+# TELEGRAM MESSAGE
 # =========================
 
 def send_message(chat_id, text):
+
     try:
         requests.post(
             f"{BASE_URL}/sendMessage",
@@ -42,58 +36,111 @@ def send_message(chat_id, text):
             },
             timeout=10
         )
+
     except Exception as e:
         print("Telegram Error:", e)
 
 
 # =========================
-# ASK GEMINI AI
+# GEMINI AI
 # =========================
 
 def ask_gemini(text):
 
-    headers = {
-        "Content-Type": "application/json"
-    }
+    last_error = None
 
-    data = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text": (
-                            "You are ItzNav Bot, a friendly and helpful "
-                            "personal AI assistant. Give clear, useful and "
-                            "easy-to-understand answers.\n\n"
-                            f"User: {text}"
-                        )
-                    }
-                ]
-            }
-        ]
-    }
+    for model in GEMINI_MODELS:
 
-    response = requests.post(
-        GEMINI_URL,
-        headers=headers,
-        params={
-            "key": GEMINI_API_KEY
-        },
-        json=data,
-        timeout=30
+        print(f"Trying Gemini model: {model}")
+
+        url = (
+            "https://generativelanguage.googleapis.com/"
+            f"v1beta/models/{model}:generateContent"
+        )
+
+        data = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": (
+                                "You are ItzNav Bot, a friendly personal "
+                                "AI assistant created by Navneet.\n\n"
+                                "Answer clearly, naturally and helpfully. "
+                                "Keep answers understandable and useful.\n\n"
+                                f"User message:\n{text}"
+                            )
+                        }
+                    ]
+                }
+            ]
+        }
+
+        try:
+
+            response = requests.post(
+                url,
+                params={
+                    "key": GEMINI_API_KEY
+                },
+                headers={
+                    "Content-Type": "application/json"
+                },
+                json=data,
+                timeout=30
+            )
+
+            print(
+                f"Gemini {model} status:",
+                response.status_code
+            )
+
+            # Successful response
+            if response.status_code == 200:
+
+                result = response.json()
+
+                reply = (
+                    result["candidates"][0]
+                    ["content"]["parts"][0]["text"]
+                )
+
+                return reply
+
+            # Model temporarily busy
+            if response.status_code in [429, 500, 503]:
+
+                print(
+                    f"{model} temporarily unavailable."
+                )
+
+                last_error = response.text
+
+                # Try next model
+                time.sleep(1)
+
+                continue
+
+            # Other error
+            print(
+                f"Gemini API error from {model}:",
+                response.text
+            )
+
+            last_error = response.text
+
+        except Exception as e:
+
+            print(
+                f"Connection error with {model}:",
+                e
+            )
+
+            last_error = str(e)
+
+    raise Exception(
+        f"All Gemini models failed: {last_error}"
     )
-
-    # Raise error if Gemini returns 4xx/5xx
-    response.raise_for_status()
-
-    result = response.json()
-
-    try:
-        return result["candidates"][0]["content"]["parts"][0]["text"]
-
-    except (KeyError, IndexError, TypeError):
-        print("Unexpected Gemini response:", result)
-        raise Exception("Invalid response received from Gemini")
 
 
 # =========================
@@ -102,6 +149,7 @@ def ask_gemini(text):
 
 @app.route("/", methods=["GET"])
 def home():
+
     return "ItzNav Bot is running! 🤖"
 
 
@@ -136,7 +184,7 @@ def webhook():
 
 
     # =========================
-    # /START COMMAND
+    # START
     # =========================
 
     if text == "/start":
@@ -154,7 +202,7 @@ def webhook():
 
 
     # =========================
-    # /HELP COMMAND
+    # HELP
     # =========================
 
     if text == "/help":
@@ -164,62 +212,38 @@ def webhook():
             "🤖 ItzNav Bot Commands\n\n"
             "/start - Start the bot\n"
             "/help - Show help\n\n"
-            "💬 Send me any message and I'll answer using AI!"
+            "💬 Send me any message and "
+            "I'll answer using AI!"
         )
 
         return "OK"
 
 
     # =========================
-    # AI RESPONSE WITH RETRY
+    # AI RESPONSE
     # =========================
 
-    max_retries = 3
+    try:
 
-    for attempt in range(max_retries):
+        reply = ask_gemini(text)
 
-        try:
+        send_message(
+            chat_id,
+            reply
+        )
 
-            print(
-                f"Gemini request attempt "
-                f"{attempt + 1}/{max_retries}"
-            )
+        print("AI response sent successfully.")
 
-            reply = ask_gemini(text)
+    except Exception as e:
 
-            send_message(chat_id, reply)
+        print("Final Gemini Error:", e)
 
-            print("Gemini response sent successfully.")
-
-            break
-
-
-        except Exception as e:
-
-            print(
-                f"Gemini Error "
-                f"(attempt {attempt + 1}/{max_retries}):",
-                e
-            )
-
-            # Retry after increasing delay
-            if attempt < max_retries - 1:
-
-                wait_time = 2 ** attempt
-
-                print(
-                    f"Retrying in {wait_time} seconds..."
-                )
-
-                time.sleep(wait_time)
-
-            else:
-
-                send_message(
-                    chat_id,
-                    "⚠️ Gemini is temporarily busy.\n\n"
-                    "Please try again in a moment."
-                )
+        send_message(
+            chat_id,
+            "⚠️ I'm having trouble connecting "
+            "to my AI right now.\n\n"
+            "Please try again in a moment."
+        )
 
 
     return "OK"
