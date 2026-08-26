@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from flask import Flask, request
 from google import genai
@@ -127,21 +128,26 @@ def webhook():
         )
         return "OK"
 
-    # AI response
+    # AI response with automatic retry
+max_retries = 3
+
+for attempt in range(max_retries):
     try:
         reply = ask_gemini(chat_id, text)
         send_message(chat_id, reply)
+        break
 
     except Exception as e:
-        print("Gemini Error:", e)
-        send_message(
-            chat_id,
-            "⚠️ Sorry, I couldn't process that right now. Please try again."
-        )
+        print(f"Gemini Error (attempt {attempt + 1}/{max_retries}):", e)
 
-    return "OK"
+        if attempt < max_retries - 1:
+            wait_time = 2 ** attempt
+            print(f"Retrying in {wait_time} seconds...")
+            time.sleep(wait_time)
+        else:
+            send_message(
+                chat_id,
+                "⚠️ Gemini is temporarily busy. Please try again in a moment."
+            )
 
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port) 
+return "OK"
