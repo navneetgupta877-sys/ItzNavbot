@@ -1,0 +1,70 @@
+import os
+import requests
+from flask import Flask, request
+
+app = Flask(__name__)
+
+TOKEN = os.environ.get("BOT_TOKEN")
+BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
+
+
+def send_message(chat_id, text):
+    requests.post(
+        f"{BASE_URL}/sendMessage",
+        json={
+            "chat_id": chat_id,
+            "text": text
+        },
+        timeout=10
+    )
+
+
+@app.route("/", methods=["GET"])
+def home():
+    return "ItzNav Bot is running! 🤖"
+
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json(silent=True)
+
+    if not data:
+        return "OK"
+
+    message = data.get("message")
+
+    if not message:
+        return "OK"
+
+    chat_id = message["chat"]["id"]
+    text = message.get("text", "")
+
+    if text == "/start":
+        send_message(
+            chat_id,
+            "👋 Hello!\n\n"
+            "I'm ItzNav Bot 🤖\n"
+            "Welcome! 🚀\n\n"
+            "Type /help to see what I can do."
+        )
+
+    elif text == "/help":
+        send_message(
+            chat_id,
+            "🤖 ItzNav Bot Commands\n\n"
+            "/start - Start the bot\n"
+            "/help - Show help\n\n"
+            "Send me any message and I'll reply!"
+        )
+
+    else:
+        send_message(
+            chat_id,
+            f"📩 You said:\n{text}"
+        )
+
+    return "OK"
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
