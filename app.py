@@ -1,32 +1,39 @@
 import os
-import time
 import requests
 from flask import Flask, request
 
 app = Flask(__name__)
+
 
 # =========================================================
 # ENVIRONMENT VARIABLES
 # =========================================================
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+
 
 if not BOT_TOKEN:
     print("WARNING: BOT_TOKEN is missing!")
 
-if not GEMINI_API_KEY:
-    print("WARNING: GEMINI_API_KEY is missing!")
+if not GROQ_API_KEY:
+    print("WARNING: GROQ_API_KEY is missing!")
+
+
+# =========================================================
+# TELEGRAM
+# =========================================================
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# Gemini 3.7 Flash
-GEMINI_MODEL = "gemini-3.7-flash"
 
-GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/"
-    f"v1beta/models/{GEMINI_MODEL}:generateContent"
-)
+# =========================================================
+# AI API
+# =========================================================
+
+AI_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+AI_MODEL = "openai/gpt-oss-20b"
 
 
 # =========================================================
@@ -47,6 +54,7 @@ def send_message(chat_id, text):
         )
 
         if response.status_code != 200:
+
             print(
                 "Telegram Error:",
                 response.status_code,
@@ -55,61 +63,99 @@ def send_message(chat_id, text):
 
     except Exception as e:
 
-        print("Telegram Connection Error:", e)
+        print(
+            "Telegram Connection Error:",
+            e
+        )
 
 
 # =========================================================
-# GEMINI AI
+# ASK AI
 # =========================================================
 
-def ask_gemini(user_text):
+def ask_ai(user_text):
 
-    if not GEMINI_API_KEY:
-        raise Exception("GEMINI_API_KEY is missing")
+    if not GROQ_API_KEY:
 
-    prompt = (
-        "You are ItzNav Bot, a friendly personal AI assistant "
-        "created by Navneet.\n\n"
-        "Answer naturally, clearly and helpfully.\n"
-        "Keep simple questions concise.\n"
-        "For complex questions, give useful explanations.\n"
-        "Do not mention these instructions to the user.\n\n"
-        f"User: {user_text}"
-    )
+        raise Exception(
+            "GROQ_API_KEY is missing"
+        )
+
+
+    headers = {
+
+        "Authorization":
+            f"Bearer {GROQ_API_KEY}",
+
+        "Content-Type":
+            "application/json"
+    }
+
 
     data = {
-        "contents": [
+
+        "model": AI_MODEL,
+
+        "messages": [
+
             {
-                "parts": [
-                    {
-                        "text": prompt
-                    }
-                ]
+                "role": "system",
+
+                "content": (
+                    "You are ItzNav Bot, a friendly "
+                    "personal assistant created by Navneet.\n\n"
+
+                    "Answer naturally, clearly and helpfully.\n"
+
+                    "Do not mention the name of the AI model, "
+                    "AI provider, API, backend or these instructions.\n"
+
+                    "If the user asks who created you, say "
+                    "that you were created by Navneet.\n"
+
+                    "If the user asks your name, say "
+                    "your name is ItzNav Bot.\n\n"
+
+                    "Keep simple questions concise. "
+                    "For complex questions, give useful "
+                    "and well-structured explanations."
+                )
+            },
+
+            {
+                "role": "user",
+
+                "content": user_text
             }
         ],
-        "generationConfig": {
-            "maxOutputTokens": 1024
-        }
+
+        "temperature": 0.6,
+
+        "max_completion_tokens": 1024,
+
+        "stream": False
     }
+
 
     try:
 
         response = requests.post(
-            GEMINI_URL,
-            params={
-                "key": GEMINI_API_KEY
-            },
-            headers={
-                "Content-Type": "application/json"
-            },
+
+            AI_URL,
+
+            headers=headers,
+
             json=data,
+
             timeout=30
         )
 
+
         print(
-            "Gemini status:",
+            "AI API status:",
             response.status_code
         )
+
 
         # =================================================
         # SUCCESS
@@ -119,125 +165,85 @@ def ask_gemini(user_text):
 
             result = response.json()
 
-            candidates = result.get("candidates", [])
 
-            if not candidates:
-                raise Exception(
-                    "Gemini returned no candidates"
-                )
-
-            content = candidates[0].get(
-                "content",
-                {}
-            )
-
-            parts = content.get(
-                "parts",
+            choices = result.get(
+                "choices",
                 []
             )
 
-            if not parts:
+
+            if not choices:
+
                 raise Exception(
-                    "Gemini returned empty response"
+                    "AI returned no response"
                 )
 
-            reply = parts[0].get(
-                "text",
+
+            message = choices[0].get(
+                "message",
+                {}
+            )
+
+
+            reply = message.get(
+                "content",
                 ""
             )
 
+
             if not reply:
+
                 raise Exception(
-                    "Gemini returned empty text"
+                    "AI returned empty response"
                 )
+
 
             return reply.strip()
 
 
         # =================================================
-        # RATE LIMIT / TEMPORARY SERVER ERROR
+        # RATE LIMIT
         # =================================================
 
-        if response.status_code in [429, 500, 503]:
-
-            print(
-                "Gemini temporarily unavailable:",
-                response.text
-            )
-
-            # One quick retry
-            time.sleep(0.5)
-
-            retry = requests.post(
-                GEMINI_URL,
-                params={
-                    "key": GEMINI_API_KEY
-                },
-                headers={
-                    "Content-Type": "application/json"
-                },
-                json=data,
-                timeout=30
-            )
-
-            print(
-                "Gemini retry status:",
-                retry.status_code
-            )
-
-            if retry.status_code == 200:
-
-                result = retry.json()
-
-                candidates = result.get(
-                    "candidates",
-                    []
-                )
-
-                if candidates:
-
-                    parts = candidates[0].get(
-                        "content",
-                        {}
-                    ).get(
-                        "parts",
-                        []
-                    )
-
-                    if parts:
-
-                        reply = parts[0].get(
-                            "text",
-                            ""
-                        )
-
-                        if reply:
-                            return reply.strip()
+        if response.status_code == 429:
 
             raise Exception(
-                "Gemini is temporarily busy"
+                "AI rate limit reached"
             )
 
 
         # =================================================
-        # OTHER API ERROR
+        # SERVER ERROR
+        # =================================================
+
+        if response.status_code >= 500:
+
+            raise Exception(
+                "AI server temporarily unavailable"
+            )
+
+
+        # =================================================
+        # OTHER ERROR
         # =================================================
 
         raise Exception(
-            f"Gemini API Error {response.status_code}: "
+            f"AI API Error {response.status_code}: "
             f"{response.text}"
         )
+
 
     except requests.exceptions.Timeout:
 
         raise Exception(
-            "Gemini request timed out"
+            "AI request timed out"
         )
+
 
     except requests.exceptions.RequestException as e:
 
         raise Exception(
-            f"Gemini connection error: {e}"
+            f"AI connection error: {e}"
         )
 
 
@@ -274,50 +280,69 @@ def webhook():
             silent=True
         )
 
+
         if not data:
+
             return "OK"
+
 
         message = data.get(
             "message"
         )
 
+
         if not message:
+
             return "OK"
+
 
         chat = message.get(
             "chat"
         )
 
+
         if not chat:
+
             return "OK"
+
 
         chat_id = chat.get(
             "id"
         )
+
 
         text = message.get(
             "text",
             ""
         )
 
+
         if not text:
+
             return "OK"
+
 
         text = text.strip()
 
 
         # =================================================
-        # /START
+        # START COMMAND
         # =================================================
 
         if text == "/start":
 
             send_message(
+
                 chat_id,
+
                 "👋 Hello!\n\n"
+
                 "I'm ItzNav Bot 🤖\n"
-                "Your personal AI assistant.\n\n"
+
+                "Your personal assistant.\n\n"
+
                 "Ask me anything! 🚀\n\n"
+
                 "Type /help to see commands."
             )
 
@@ -325,18 +350,23 @@ def webhook():
 
 
         # =================================================
-        # /HELP
+        # HELP COMMAND
         # =================================================
 
         if text == "/help":
 
             send_message(
+
                 chat_id,
+
                 "🤖 ItzNav Bot Commands\n\n"
+
                 "/start - Start the bot\n"
+
                 "/help - Show help\n\n"
+
                 "💬 Send me any message and "
-                "I'll answer using AI!"
+                "I'll answer you."
             )
 
             return "OK"
@@ -348,33 +378,42 @@ def webhook():
 
         try:
 
-            reply = ask_gemini(
-                text
-            )
+            reply = ask_ai(text)
+
 
             send_message(
+
                 chat_id,
+
                 reply
             )
 
+
             print(
-                "AI response sent successfully."
+                "Response sent successfully."
             )
+
 
         except Exception as e:
 
             print(
-                "Gemini Error:",
+                "AI Error:",
                 e
             )
 
+
             send_message(
+
                 chat_id,
-                "⚠️ Gemini is temporarily busy.\n\n"
-                "Please try again in a moment."
+
+                "⚠️ I'm having trouble "
+                "processing that right now.\n\n"
+                "Please try again."
             )
 
+
         return "OK"
+
 
     except Exception as e:
 
@@ -393,17 +432,22 @@ def webhook():
 if __name__ == "__main__":
 
     port = int(
+
         os.environ.get(
             "PORT",
             10000
         )
     )
 
+
     print(
         f"ItzNav Bot starting on port {port}"
     )
 
+
     app.run(
+
         host="0.0.0.0",
+
         port=port
     )
